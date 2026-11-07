@@ -50,8 +50,14 @@ fn main() {
         action.sa_sigaction = on_prof as *const () as usize;
         action.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
         libc::sigaction(libc::SIGPROF, &action, std::ptr::null_mut());
-        let tick = libc::timeval { tv_sec: 0, tv_usec: 1000 };
-        let timer = libc::itimerval { it_interval: tick, it_value: tick };
+        let tick = libc::timeval {
+            tv_sec: 0,
+            tv_usec: 1000,
+        };
+        let timer = libc::itimerval {
+            it_interval: tick,
+            it_value: tick,
+        };
         libc::setitimer(libc::ITIMER_PROF, &timer, std::ptr::null_mut());
     }
     for _ in 0..frames {
@@ -60,8 +66,14 @@ fn main() {
     }
     // SAFETY: stop the timer before reading the samples.
     unsafe {
-        let zero = libc::timeval { tv_sec: 0, tv_usec: 0 };
-        let timer = libc::itimerval { it_interval: zero, it_value: zero };
+        let zero = libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        };
+        let timer = libc::itimerval {
+            it_interval: zero,
+            it_value: zero,
+        };
         libc::setitimer(libc::ITIMER_PROF, &timer, std::ptr::null_mut());
     }
     let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
