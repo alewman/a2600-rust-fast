@@ -697,178 +697,24 @@ impl Tia {
                 let p = &mut self.players[i];
                 p.size_history = (self.nusiz[i], p.size_history.0);
             }
+        } else if object_clock == 0x1F
+            && object_motck == 0x1F
+            && stuff == 0
+            && !self.counters_busy
+            && !locks[2]
+            && !locks[3]
+            && !(RESP0..RESP0 + 5).contains(&address)
+        {
+            self.objects(0x1F, 0x1F, 0, kept_strobe, -1, [false; 5]);
         } else {
-            // Ring events, from the present counter state:
-            // (clocked, the end of H@1, H@2, held, ring).
-            let mut events = [(false, false, false, false, 0u8); 5];
-            for (i, event) in events.iter_mut().enumerate() {
-                let c = &self.counters[i];
-                let clocked = object_clock & (0x10 >> i) != 0;
-                let held = c.window_history & 4 != 0 || locks[i];
-                let ring = c.ring;
-                let due = c.deferred && c.window_history == 0 && c.strobe_left == 0;
-                let ring_clock = (clocked || due) && !held;
-                *event = (
-                    clocked,
-                    ring_clock && ring == 1,
-                    ring_clock && ring == 2,
-                    held,
-                    ring,
-                );
-            }
-
-            // ---- players
-            for i in 0..2 {
-                let (clocked, o_h1_end, o_h2, held, ring) = events[i];
-                let nusiz = self.nusiz[i];
-                let count = self.counters[i].count;
-                let p = &mut self.players[i];
-                let (size1, size2) = p.size_history;
-                if !clocked
-                    && !o_h1_end
-                    && size1 == nusiz
-                    && size2 == nusiz
-                    && object_motck & (0x10 >> i) == 0
-                {
-                    continue;
-                }
-                let mut start_decode = false;
-                if o_h1_end {
-                    start_decode = count == MAIN || copies(nusiz, count);
-                    if start_decode && count != MAIN {
-                        p.copy_flag = true;
-                    }
-                }
-                if o_h2 && count == MAIN {
-                    p.copy_flag = false;
-                }
-                let (old_gate, old_q, old_q2) = (p.gate, p.start_q, p.start_q2);
-                if clocked || object_motck & (0x10 >> i) != 0 {
-                    // The stretch gate: the two-phase state caught on MOTCK and on
-                    // HMOVE's stuffed pulses too, so under the comb those shift out
-                    // a wrapped player's last pixels (Towers: "a HMOVE can gobble up
-                    // the wrapped player graphics"; die trace hmove_wrap, Sea Hawk),
-                    // NUSIZ taken two steps late (tia-fpga "Objects"). A RESxx hold
-                    // opens a 2x gate and shuts a 4x one (resp_start).
-                    p.gate = if size2 == 0b111 {
-                        held || ring != 3
-                    } else if size2 == 0b101 {
-                        !(held || ring == 1 || ring == 3)
-                    } else {
-                        false
-                    };
-                }
-                if clocked {
-                    let start_pulse = if nusiz == 0b101 || nusiz == 0b111 {
-                        old_q2
-                    } else {
-                        old_q
-                    };
-                    p.start_q = o_h2 && p.start_latched;
-                    p.start_q2 = old_q;
-                    // The scan counter takes START only on a clock the stretch gate
-                    // lets through: a 4x copy whose start falls in a RESxx hold is
-                    // never drawn, a 2x one is (die traces hmove_wrap, resp_start).
-                    if start_pulse && !old_gate {
-                        p.scan = 0;
-                        p.scanning = true;
-                    } else if !old_gate && p.scanning {
-                        p.scanning = p.scan != 7;
-                        p.scan = (p.scan + 1) & 7;
-                    }
-                }
-                if o_h1_end {
-                    p.start_latched = start_decode;
-                }
-                p.size_history = (nusiz, size1);
-            }
-
-            // ---- missiles and the ball
-            for j in 0..2 {
-                let (_, o_h1_end, o_h2, _, _) = events[2 + j];
-                if o_h1_end {
-                    let count = self.counters[2 + j].count;
-                    self.missiles[j].start_latched = count == MAIN || copies(self.nusiz[j], count);
-                } else if o_h2 {
-                    let m = &mut self.missiles[j];
-                    m.second = m.first;
-                    m.first = m.start_latched;
-                }
-            }
-            if events[4].2 {
-                let first = self.ball.first;
-                self.ball.second = first;
-                self.ball.first = self.counters[4].clear_pending;
-            }
-
-            // ---- object counters (after the players, missiles and ball read them)
-            for i in 0..5 {
-                let strobe = address == RESP0 + i as i32;
-                let (clocked, o_h1_end, o_h2, held, ring) = events[i];
-                let c = &mut self.counters[i];
-                if !(clocked
-                    || strobe
-                    || c.strobe_left != 0
-                    || c.window_history != 0
-                    || held
-                    || c.deferred)
-                {
-                    continue;
-                }
-                if o_h1_end {
-                    c.clear_pending = c.pending || c.count == MAIN || c.count == LFSR_ERROR;
-                }
-                if o_h2 {
-                    c.count = if c.clear_pending {
-                        0
-                    } else {
-                        next_count(c.count, 40)
-                    };
-                }
-                // A stuffed (HMOVE) pulse that arrives after the RESxx strobe's own
-                // step and before its hold lets go is not lost: it steps the ring
-                // once the hold is over. MOTCK pulses, on the other edge, never meet
-                // the strobe's steps (hmove_resp0 die trace; C28).
-                let due = c.deferred && c.window_history == 0 && c.strobe_left == 0 && !strobe;
-                c.ring = if held {
-                    1
-                } else if clocked || due {
-                    (ring + 1) & 3
-                } else {
-                    ring
-                };
-                let kept = if c.strobe_left != 0 {
-                    kept_strobe
-                } else {
-                    0x1F
-                }; // the hold always keeps it
-                if stuff & kept & (0x10 >> i) != 0 && (c.strobe_left != 0 || held) {
-                    c.deferred = true;
-                } else if due {
-                    c.deferred = false;
-                }
-                c.pending = if held {
-                    true
-                } else if o_h2 {
-                    false
-                } else {
-                    c.pending
-                };
-                let window = strobe || c.strobe_left != 0;
-                c.strobe_left = if strobe {
-                    2
-                } else if c.strobe_left != 0 {
-                    c.strobe_left - 1
-                } else {
-                    0
-                };
-                c.window_history = ((c.window_history << 1) | window as u8) & 0b111;
-            }
-            self.pixels_cache = None;
-            self.counters_busy = self
-                .counters
-                .iter()
-                .any(|c| c.strobe_left != 0 || c.window_history != 0 || c.deferred);
+            self.objects(
+                object_clock,
+                object_motck,
+                stuff,
+                kept_strobe,
+                address,
+                locks,
+            );
         }
 
         // ---- playfield: each bit is read on H@1 and shown from the next H@2
@@ -1093,6 +939,194 @@ impl Tia {
             col: colour >> 4,
             lum: (colour >> 1) & 7,
         }
+    }
+
+    /// The object sections of a busy step: ring events, players, missiles and
+    /// the ball, the object counters. Always inlined, and called with literal
+    /// inputs for the commonest busy step (a plain MOTCK to all five objects:
+    /// no HMOVE pulse, strobe, hold or lock), so that copy loses the branches
+    /// those inputs decide.
+    #[inline(always)]
+    fn objects(
+        &mut self,
+        object_clock: u8,
+        object_motck: u8,
+        stuff: u8,
+        kept_strobe: u8,
+        address: i32,
+        locks: [bool; 5],
+    ) {
+        // Ring events, from the present counter state:
+        // (clocked, the end of H@1, H@2, held, ring).
+        let mut events = [(false, false, false, false, 0u8); 5];
+        for (i, event) in events.iter_mut().enumerate() {
+            let c = &self.counters[i];
+            let clocked = object_clock & (0x10 >> i) != 0;
+            let held = c.window_history & 4 != 0 || locks[i];
+            let ring = c.ring;
+            let due = c.deferred && c.window_history == 0 && c.strobe_left == 0;
+            let ring_clock = (clocked || due) && !held;
+            *event = (
+                clocked,
+                ring_clock && ring == 1,
+                ring_clock && ring == 2,
+                held,
+                ring,
+            );
+        }
+
+        // ---- players
+        for i in 0..2 {
+            let (clocked, o_h1_end, o_h2, held, ring) = events[i];
+            let nusiz = self.nusiz[i];
+            let count = self.counters[i].count;
+            let p = &mut self.players[i];
+            let (size1, size2) = p.size_history;
+            if !clocked
+                && !o_h1_end
+                && size1 == nusiz
+                && size2 == nusiz
+                && object_motck & (0x10 >> i) == 0
+            {
+                continue;
+            }
+            let mut start_decode = false;
+            if o_h1_end {
+                start_decode = count == MAIN || copies(nusiz, count);
+                if start_decode && count != MAIN {
+                    p.copy_flag = true;
+                }
+            }
+            if o_h2 && count == MAIN {
+                p.copy_flag = false;
+            }
+            let (old_gate, old_q, old_q2) = (p.gate, p.start_q, p.start_q2);
+            if clocked || object_motck & (0x10 >> i) != 0 {
+                // The stretch gate: the two-phase state caught on MOTCK and on
+                // HMOVE's stuffed pulses too, so under the comb those shift out
+                // a wrapped player's last pixels (Towers: "a HMOVE can gobble up
+                // the wrapped player graphics"; die trace hmove_wrap, Sea Hawk),
+                // NUSIZ taken two steps late (tia-fpga "Objects"). A RESxx hold
+                // opens a 2x gate and shuts a 4x one (resp_start).
+                p.gate = if size2 == 0b111 {
+                    held || ring != 3
+                } else if size2 == 0b101 {
+                    !(held || ring == 1 || ring == 3)
+                } else {
+                    false
+                };
+            }
+            if clocked {
+                let start_pulse = if nusiz == 0b101 || nusiz == 0b111 {
+                    old_q2
+                } else {
+                    old_q
+                };
+                p.start_q = o_h2 && p.start_latched;
+                p.start_q2 = old_q;
+                // The scan counter takes START only on a clock the stretch gate
+                // lets through: a 4x copy whose start falls in a RESxx hold is
+                // never drawn, a 2x one is (die traces hmove_wrap, resp_start).
+                if start_pulse && !old_gate {
+                    p.scan = 0;
+                    p.scanning = true;
+                } else if !old_gate && p.scanning {
+                    p.scanning = p.scan != 7;
+                    p.scan = (p.scan + 1) & 7;
+                }
+            }
+            if o_h1_end {
+                p.start_latched = start_decode;
+            }
+            p.size_history = (nusiz, size1);
+        }
+
+        // ---- missiles and the ball
+        for j in 0..2 {
+            let (_, o_h1_end, o_h2, _, _) = events[2 + j];
+            if o_h1_end {
+                let count = self.counters[2 + j].count;
+                self.missiles[j].start_latched = count == MAIN || copies(self.nusiz[j], count);
+            } else if o_h2 {
+                let m = &mut self.missiles[j];
+                m.second = m.first;
+                m.first = m.start_latched;
+            }
+        }
+        if events[4].2 {
+            let first = self.ball.first;
+            self.ball.second = first;
+            self.ball.first = self.counters[4].clear_pending;
+        }
+
+        // ---- object counters (after the players, missiles and ball read them)
+        for i in 0..5 {
+            let strobe = address == RESP0 + i as i32;
+            let (clocked, o_h1_end, o_h2, held, ring) = events[i];
+            let c = &mut self.counters[i];
+            if !(clocked
+                || strobe
+                || c.strobe_left != 0
+                || c.window_history != 0
+                || held
+                || c.deferred)
+            {
+                continue;
+            }
+            if o_h1_end {
+                c.clear_pending = c.pending || c.count == MAIN || c.count == LFSR_ERROR;
+            }
+            if o_h2 {
+                c.count = if c.clear_pending {
+                    0
+                } else {
+                    next_count(c.count, 40)
+                };
+            }
+            // A stuffed (HMOVE) pulse that arrives after the RESxx strobe's own
+            // step and before its hold lets go is not lost: it steps the ring
+            // once the hold is over. MOTCK pulses, on the other edge, never meet
+            // the strobe's steps (hmove_resp0 die trace; C28).
+            let due = c.deferred && c.window_history == 0 && c.strobe_left == 0 && !strobe;
+            c.ring = if held {
+                1
+            } else if clocked || due {
+                (ring + 1) & 3
+            } else {
+                ring
+            };
+            let kept = if c.strobe_left != 0 {
+                kept_strobe
+            } else {
+                0x1F
+            }; // the hold always keeps it
+            if stuff & kept & (0x10 >> i) != 0 && (c.strobe_left != 0 || held) {
+                c.deferred = true;
+            } else if due {
+                c.deferred = false;
+            }
+            c.pending = if held {
+                true
+            } else if o_h2 {
+                false
+            } else {
+                c.pending
+            };
+            let window = strobe || c.strobe_left != 0;
+            c.strobe_left = if strobe {
+                2
+            } else if c.strobe_left != 0 {
+                c.strobe_left - 1
+            } else {
+                0
+            };
+            c.window_history = ((c.window_history << 1) | window as u8) & 0b111;
+        }
+        self.pixels_cache = None;
+        self.counters_busy = self
+            .counters
+            .iter()
+            .any(|c| c.strobe_left != 0 || c.window_history != 0 || c.deferred);
     }
 
     /// Each object's output as the present state gives it.
