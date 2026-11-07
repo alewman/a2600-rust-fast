@@ -1,11 +1,11 @@
 [package]
-name = "a2600-rust"
+name = "a2600-rust-fast"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-description = "A Rust Atari 2600 board transcribed from, and proven equivalent to, a2600-python"
+description = "A speed fork of a2600-rust, held in lockstep with it"
 license = "MIT"
-repository = "https://github.com/alewman/a2600-rust"
+repository = "https://github.com/alewman/a2600-rust-fast"
 publish = false
 
 [lib]
@@ -19,6 +19,15 @@ sixfiveohtwo = { git = "https://github.com/alewman/6502-rust", rev = "71747eb903
 # Reading .zip images (the reference uses Python's zipfile) and the PNG's IDAT.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
+# The sampling profiler (a2600-profile) only.
+libc = { version = "0.2", optional = true }
+
+[features]
+profile = ["dep:libc"]
+
+[[bin]]
+name = "a2600-profile"
+required-features = ["profile"]
 
 [profile.release]
 debug = 1
