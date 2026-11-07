@@ -204,6 +204,17 @@ fn width_active(width: &Width, size: u8, ring: u8) -> bool {
 }
 
 /// A line the TIA has finished: its 228 colour clocks and VSYNC as it then stands.
+/// The TIA's output pins as the die-trace replay scores them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pins {
+    pub au0: u8,
+    pub au1: u8,
+    pub sync_low: bool,
+    pub blank: bool,
+    pub col: u8,
+    pub lum: u8,
+}
+
 pub type LineSink = Box<dyn FnMut(&[u8; 228], bool)>;
 
 pub struct Tia {
@@ -216,8 +227,6 @@ pub struct Tia {
     pub on_line: Option<LineSink>,
     pub registers: [u8; 0x40],
     pub audio: Audio,
-    pub au0: u8,
-    pub au1: u8,
     // Write registers.
     pub vsync: bool,
     pub vblank: u8,
@@ -307,10 +316,6 @@ pub struct Tia {
     /// when VBLANK D7 last let the paddle pads go (`now`)
     pub dump_released: u64,
     // Pins after the last step.
-    pub lum: u8,
-    pub col: u8,
-    pub blank: bool,
-    pub sync_low: bool,
     pub ph0: bool,
     /// Where in the line: step 0 is the step HBLANK starts (a falling edge).
     pub step_in_line: u32,
@@ -327,8 +332,6 @@ impl Tia {
             on_line: None,
             registers: [0; 0x40],
             audio: Audio::new(),
-            au0: 0,
-            au1: 0,
             vsync: false,
             vblank: 0,
             nusiz: [0; 2],
@@ -392,10 +395,6 @@ impl Tia {
             trigger_latch: 0b11,
             fire: [false; 2],
             dump_released: 0,
-            lum: 0,
-            col: 0,
-            blank: true,
-            sync_low: false,
             ph0: true,
             step_in_line: 0,
             rising: true,
@@ -1007,50 +1006,62 @@ impl Tia {
             }
         }
 
-        // ---- pins, from the committed state
-        let [c0, c1] = &self.audio.channels;
-        self.au0 = if c0.pulse & 1 != 0 { c0.audv } else { 0 };
-        self.au1 = if c1.pulse & 1 != 0 { c1.audv } else { 0 };
+        // ---- pins, from the committed state. PH0 is kept every step (RSYNC
+        // reads it on the next); the other pins only matter to a reader of
+        // the die's pins and are computed when asked (`pins`), and the colour
+        // only on the falling edge that takes a pixel.
         self.ph0 = self.cpu_divider >= 3;
-        self.sync_low = self.hsync != self.vsync;
-        let blank = self.hblank || self.vblank_latched;
-        self.blank = blank;
-        let colour = if blank {
-            0
-        } else {
-            let [p0q, p1q, m0q, m1q, blq] = self.out_objects;
-            let [colup0, colup1, colupf, colubk] = self.out_colours;
-            let pf_or_ball = self.pf_shown || blq;
-            let pf_colour = if self.out_score && !self.out_priority {
-                if self.score_right {
-                    colup1
-                } else {
-                    colup0
-                }
-            } else {
-                colupf
-            };
-            if self.out_priority && pf_or_ball {
-                pf_colour
-            } else if p0q || m0q {
-                colup0
-            } else if p1q || m1q {
-                colup1
-            } else if self.pf_shown {
-                pf_colour
-            } else if blq {
-                // SCORE colours the playfield only: the ball keeps COLUPF
-                // (C32; die trace ball_score, Alpha Beam with Ernie).
-                colupf
-            } else {
-                colubk
-            }
-        };
-        self.col = colour >> 4;
-        self.lum = (colour >> 1) & 7;
         if fall {
+            let blank = self.hblank || self.vblank_latched;
             self.pixels[((self.step_in_line >> 1) % 228) as usize] =
-                if blank { 0 } else { (colour & 0xFE) | 1 };
+                if blank { 0 } else { (self.colour() & 0xFE) | 1 };
+        }
+    }
+
+    /// The colour the output latches select, as the pads drive it unblanked.
+    fn colour(&self) -> u8 {
+        let [p0q, p1q, m0q, m1q, blq] = self.out_objects;
+        let [colup0, colup1, colupf, colubk] = self.out_colours;
+        let pf_or_ball = self.pf_shown || blq;
+        let pf_colour = if self.out_score && !self.out_priority {
+            if self.score_right {
+                colup1
+            } else {
+                colup0
+            }
+        } else {
+            colupf
+        };
+        if self.out_priority && pf_or_ball {
+            pf_colour
+        } else if p0q || m0q {
+            colup0
+        } else if p1q || m1q {
+            colup1
+        } else if self.pf_shown {
+            pf_colour
+        } else if blq {
+            // SCORE colours the playfield only: the ball keeps COLUPF
+            // (C32; die trace ball_score, Alpha Beam with Ernie).
+            colupf
+        } else {
+            colubk
+        }
+    }
+
+    /// The pins after the last step, from the committed state (the
+    /// reference keeps them as fields, updated every step).
+    pub fn pins(&self) -> Pins {
+        let [c0, c1] = &self.audio.channels;
+        let blank = self.hblank || self.vblank_latched;
+        let colour = if blank { 0 } else { self.colour() };
+        Pins {
+            au0: if c0.pulse & 1 != 0 { c0.audv } else { 0 },
+            au1: if c1.pulse & 1 != 0 { c1.audv } else { 0 },
+            sync_low: self.hsync != self.vsync,
+            blank,
+            col: colour >> 4,
+            lum: (colour >> 1) & 7,
         }
     }
 

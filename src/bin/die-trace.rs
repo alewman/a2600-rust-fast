@@ -102,16 +102,17 @@ fn replay(records: &[[u8; 17]], warm: usize, report: usize) -> (u64, [u64; 9], b
             let d = tia.read(bus[5]);
             dbdrv = (if d & 0x80 != 0 { 8 } else { 4 }) | (if d & 0x40 != 0 { 2 } else { 1 });
         }
+        let pins = tia.pins();
         let ours = [
             tia.ph0 as u8,
             tia.rdy_low as u8,
-            tia.sync_low as u8,
-            tia.lum,
-            tia.col,
-            tia.blank as u8,
+            pins.sync_low as u8,
+            pins.lum,
+            pins.col,
+            pins.blank as u8,
             dbdrv,
-            tia.au0,
-            tia.au1,
+            pins.au0,
+            pins.au1,
         ];
         let theirs = [
             rec[8], rec[9], rec[10], rec[11], rec[12], rec[13], rec[16], rec[14], rec[15],
