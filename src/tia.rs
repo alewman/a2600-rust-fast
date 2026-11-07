@@ -290,6 +290,10 @@ pub struct Tia {
     /// Some object counter is in a RESxx strobe, its hold, or a deferred
     /// step: set at the end of the object sections, which alone change those
     pub counters_busy: bool,
+    /// The objects' outputs as `object_pixels` last gave them, while nothing
+    /// they depend on has changed: only the object sections (on a busy step)
+    /// and register writes change it
+    pixels_cache: Option<[bool; 5]>,
     // Objects: P0 P1 M0 M1 BL.
     pub counters: [ObjectCounter; 5],
     pub players: [Player; 2],
@@ -379,6 +383,7 @@ impl Tia {
             merge_4: 0,
             merged: 0,
             counters_busy: false,
+            pixels_cache: None,
             counters: Default::default(),
             players: Default::default(),
             missiles: Default::default(),
@@ -644,7 +649,14 @@ impl Tia {
         // ---- objects: outputs from the present state (collisions, the pads)
         let need_pixels = fall || !hblank;
         let pixels = if need_pixels {
-            self.object_pixels()
+            match self.pixels_cache {
+                Some(pixels) => pixels,
+                None => {
+                    let pixels = self.object_pixels();
+                    self.pixels_cache = Some(pixels);
+                    pixels
+                }
+            }
         } else {
             [false; 5]
         };
@@ -841,6 +853,7 @@ impl Tia {
                 };
                 c.window_history = ((c.window_history << 1) | window as u8) & 0b111;
             }
+            self.pixels_cache = None;
             self.counters_busy = self
                 .counters
                 .iter()
@@ -988,6 +1001,7 @@ impl Tia {
         }
         if let Some((_, value)) = write {
             self.write_register(address, value);
+            self.pixels_cache = None;
         }
         if shb {
             if let Some(sink) = &mut self.on_line {
