@@ -281,10 +281,9 @@ pub struct Tia {
     pub hm_late: [[u8; 5]; 4],
     pub hm_pos: usize,
     /// merged pulses, steps ago
-    pub merge_1: u8,
-    pub merge_2: u8,
-    pub merge_3: u8,
-    pub merge_4: u8,
+    /// the reference's merge_1..merge_4 as the bytes of one word, merge_1
+    /// lowest: one shift a step moves them all
+    pub merges: u32,
     pub merged: u8,
     /// Some object counter is in a RESxx strobe, its hold, or a deferred
     /// step: set at the end of the object sections, which alone change those
@@ -376,10 +375,7 @@ impl Tia {
             hmove_history: 0,
             hm_late: [[0; 5]; 4],
             hm_pos: 0,
-            merge_1: 0,
-            merge_2: 0,
-            merge_3: 0,
-            merge_4: 0,
+            merges: 0,
             merged: 0,
             counters_busy: false,
             pixels_cache: None,
@@ -631,7 +627,7 @@ impl Tia {
                 self.motion_count = count - 1;
             }
         }
-        let merge = self.merge_4;
+        let merge = (self.merges >> 24) as u8;
         // The latch that moves HBLANK's end to LRHB samples the strobe on H@2,
         // the first one at least five steps after the write, and the counter's
         // wrap clears it: so an HMOVE on cycle 20 is too late for this line's
@@ -842,10 +838,7 @@ impl Tia {
         self.hmove_history = ((self.hmove_history << 1) | (address == HMOVE) as u16) & 0xFFF;
         self.hm_late[self.hm_pos] = self.hm;
         self.hm_pos = (self.hm_pos + 1) & 3;
-        self.merge_4 = self.merge_3;
-        self.merge_3 = self.merge_2;
-        self.merge_2 = self.merge_1;
-        self.merge_1 = merge_now;
+        self.merges = (self.merges << 8) | merge_now as u32;
         if merge != 0 {
             // A merged pulse steps the object half a colour clock early, and the
             // pads take it on this same step (tia-fpga "HMOVE": "the object
