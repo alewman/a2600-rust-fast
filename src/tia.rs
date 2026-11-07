@@ -705,7 +705,7 @@ impl Tia {
             && !locks[3]
             && !(RESP0..RESP0 + 5).contains(&address)
         {
-            self.objects(0x1F, 0x1F, 0, kept_strobe, -1, [false; 5]);
+            self.objects(0x1F, 0x1F, 0, kept_strobe, -1, [false; 5], true);
         } else {
             self.objects(
                 object_clock,
@@ -714,6 +714,7 @@ impl Tia {
                 kept_strobe,
                 address,
                 locks,
+                false,
             );
         }
 
@@ -955,16 +956,19 @@ impl Tia {
         kept_strobe: u8,
         address: i32,
         locks: [bool; 5],
+        plain: bool,
     ) {
+        // `plain`: a plain MOTCK step, where no counter is in a strobe, hold
+        // or deferred step (counters_busy is false), so those fields are 0.
         // Ring events, from the present counter state:
         // (clocked, the end of H@1, H@2, held, ring).
         let mut events = [(false, false, false, false, 0u8); 5];
         for (i, event) in events.iter_mut().enumerate() {
             let c = &self.counters[i];
             let clocked = object_clock & (0x10 >> i) != 0;
-            let held = c.window_history & 4 != 0 || locks[i];
+            let held = !plain && (c.window_history & 4 != 0 || locks[i]);
             let ring = c.ring;
-            let due = c.deferred && c.window_history == 0 && c.strobe_left == 0;
+            let due = !plain && c.deferred && c.window_history == 0 && c.strobe_left == 0;
             let ring_clock = (clocked || due) && !held;
             *event = (
                 clocked,
@@ -1060,6 +1064,28 @@ impl Tia {
         }
 
         // ---- object counters (after the players, missiles and ball read them)
+        if plain {
+            // Clocked, not held, no strobe or deferred pulse: the ring steps,
+            // the count clears or steps on H@2, and nothing else moves.
+            for i in 0..5 {
+                let (_, o_h1_end, o_h2, _, ring) = events[i];
+                let c = &mut self.counters[i];
+                if o_h1_end {
+                    c.clear_pending = c.pending || c.count == MAIN || c.count == LFSR_ERROR;
+                }
+                if o_h2 {
+                    c.count = if c.clear_pending {
+                        0
+                    } else {
+                        next_count(c.count, 40)
+                    };
+                    c.pending = false;
+                }
+                c.ring = (ring + 1) & 3;
+            }
+            self.pixels_cache = None;
+            return;
+        }
         for i in 0..5 {
             let strobe = address == RESP0 + i as i32;
             let (clocked, o_h1_end, o_h2, held, ring) = events[i];
