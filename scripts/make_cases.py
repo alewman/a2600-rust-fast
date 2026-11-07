@@ -50,6 +50,9 @@ LONG = [
     ("long-burgertime", 1500, "BurgerTime (USA)", "--reset 30:60 --joy 0:r@100:400 --joy 0:l@400:700"),
     ("long-decathlon", 1500, "Activision Decathlon, The (USA)", "--reset 30:60 --joy 0:lr@100:900"),
     ("long-dragonstomper", 1500, "Dragonstomper (USA)", "--reset 30:60 --joy 0:f@100:110 --joy 0:r@200:600"),
+    # A SaveKey game: it writes its save and reads it back through the EEPROM.
+    ("long-savekey-go-fish", 600, "Go Fish! (World) (NTSC) (Aftermarket) (Unl)",
+     "--savekey --reset 30:60 --joy 0:f@100:110 --joy 0:r@200:260 --joy 0:f@300:310 --reset 400:420"),
 ]  # fmt: skip
 
 
