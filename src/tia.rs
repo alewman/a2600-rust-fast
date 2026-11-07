@@ -276,7 +276,6 @@ pub struct Tia {
     pub h1_history: u16,
     pub h2_history: u16,
     pub hmove_history: u16,
-    /// HMxx 1 to 4 steps ago
     /// HMxx as committed on each of the last 4 steps, a ring: `hm_pos` is
     /// the slot the next commit writes, which holds HMxx from 4 steps ago
     pub hm_late: [[u8; 5]; 4],
