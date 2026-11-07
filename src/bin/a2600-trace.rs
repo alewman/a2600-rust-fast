@@ -15,8 +15,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use a2600_rust::cartridge::{read_image, Options};
-use a2600_rust::controllers::{joystick, Paddles, Pads, Stick};
+use a2600_rust::controllers::{joystick, Paddles, Pads, SaveKey, Stick};
 use a2600_rust::machine::{machine, revision};
+use a2600_rust::riot::PortA;
 use a2600_rust::trace::{crc32, Crc32, HEADER, SLICE_CYCLES};
 use a2600_rust::System;
 
@@ -35,6 +36,15 @@ fn read_member(path: &std::path::Path, member: &str) -> Vec<u8> {
     let mut data = Vec::new();
     std::io::Read::read_to_end(&mut entry, &mut data).expect("read");
     data
+}
+
+/// The SaveKey as the RIOT's device, kept so the trace can read its data.
+struct Shared(Rc<RefCell<SaveKey>>);
+
+impl PortA for Shared {
+    fn lines(&mut self, levels: u8, cycle: i64) -> u8 {
+        self.0.borrow_mut().lines(levels, cycle)
+    }
 }
 
 struct Joy {
@@ -59,6 +69,7 @@ fn main() {
     let mut paddles: Vec<(usize, f64, u64)> = Vec::new();
     let mut out: Option<PathBuf> = None;
     let mut member: Option<String> = None;
+    let mut savekey_on = false;
     while let Some(arg) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| panic!("{arg} needs a value"));
         match arg.as_str() {
@@ -94,6 +105,7 @@ fn main() {
             }
             "--out" => out = Some(PathBuf::from(value())),
             "--member" => member = Some(value()),
+            "--savekey" => savekey_on = true,
             _ if rom.is_none() => rom = Some(PathBuf::from(arg)),
             _ => panic!("unknown argument {arg}"),
         }
@@ -118,6 +130,13 @@ fn main() {
         drawn.0.update(&[vsync as u8]);
         drawn.1 += 1;
     }));
+    let savekey = savekey_on.then(|| {
+        let key = Rc::new(RefCell::new(
+            SaveKey::new(1, None, row.timing.cpu_hz()).unwrap(),
+        ));
+        system.board_mut().riot.port_a_device = Some(Box::new(Shared(Rc::clone(&key))));
+        key
+    });
     if !paddles.is_empty() {
         let hz = row.timing.colour_clock_hz;
         system.board_mut().pads = Pads::Paddles(Paddles::new(hz));
@@ -205,7 +224,7 @@ fn main() {
         let cpu = &system.cpu;
         let board = &cpu.bus;
         let (riot, tia) = (&board.riot, &board.tia);
-        writeln!(
+        write!(
             out,
             "S {k} c={} i={instructions} h={} cpu={:02X}{:02X}{:02X}{:02X}{:04X}{:02X} ram={:08X} \
              timer={:02X}/{:02X}/{}/{}/{}/{} px={:08X}/{} au={:08X}/{} tia={}/{}/{}/{}/{:04X}/{}{:02X} bus={:02X}",
@@ -220,5 +239,10 @@ fn main() {
             board.data_bus,
         )
         .unwrap();
+        if let Some(key) = &savekey {
+            let key = key.borrow();
+            write!(out, " sk={:08X}/{}", crc32(&key.data), key.pointer).unwrap();
+        }
+        writeln!(out).unwrap();
     }
 }

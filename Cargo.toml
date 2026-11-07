@@ -21,13 +21,20 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 # The sampling profiler (a2600-profile) only.
 libc = { version = "0.2", optional = true }
+# The window (a2600-play) only.
+sdl2 = { version = "0.38", optional = true }
 
 [features]
 profile = ["dep:libc"]
+frontend = ["dep:sdl2"]
 
 [[bin]]
 name = "a2600-profile"
 required-features = ["profile"]
+
+[[bin]]
+name = "a2600-play"
+required-features = ["frontend"]
 
 [profile.release]
 debug = 1

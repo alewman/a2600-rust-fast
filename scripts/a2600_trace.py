@@ -19,7 +19,7 @@ from pathlib import Path
 
 from a2600_python import MACHINES, System
 from a2600_python.cartridge import read_image
-from a2600_python.controllers import Joystick, Paddles
+from a2600_python.controllers import Joystick, Paddles, SaveKey
 from a2600_python.machine import REVISIONS
 
 HEADER = "# a2600-trace 1"
@@ -45,6 +45,7 @@ def main() -> int:
     parser.add_argument("--joy", action="append", default=[])
     parser.add_argument("--paddle", action="append", default=[])
     parser.add_argument("--member", help="the ROM inside a zip that holds several")
+    parser.add_argument("--savekey", action="store_true", help="a blank SaveKey on the right port")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
 
@@ -83,6 +84,7 @@ def main() -> int:
         position, when = rest.split("@")
         pads.append((int(pad), float(position), int(when)))
     paddles = Paddles(tia, row.timing.colour_clock_hz) if pads else None
+    savekey = SaveKey(riot, 1, None, row.timing.cpu_hz) if args.savekey else None
     ports = sorted({j[0] for j in joys})
     sticks = {port: Joystick(riot, tia, port) for port in ports}
 
@@ -131,7 +133,9 @@ def main() -> int:
             f"{riot._as_of}/{riot._wrapped_at} "
             f"px={lines_crc:08X}/{lines} au={audio:08X}/{len(samples)} "
             f"tia={tia.frame}/{tia.line}/{tia.step_in_line}/{tia.hcount}/{tia.collisions:04X}/"
-            f"{int(tia.vsync)}{tia.vblank:02X} bus={board.data_bus:02X}\n"
+            f"{int(tia.vsync)}{tia.vblank:02X} bus={board.data_bus:02X}"
+            + (f" sk={zlib.crc32(bytes(savekey.data)):08X}/{savekey.pointer}" if savekey else "")
+            + "\n"
         )
     if args.out:
         out.close()
