@@ -287,6 +287,9 @@ pub struct Tia {
     pub merge_3: u8,
     pub merge_4: u8,
     pub merged: u8,
+    /// Some object counter is in a RESxx strobe, its hold, or a deferred
+    /// step: set at the end of the object sections, which alone change those
+    pub counters_busy: bool,
     // Objects: P0 P1 M0 M1 BL.
     pub counters: [ObjectCounter; 5],
     pub players: [Player; 2],
@@ -375,6 +378,7 @@ impl Tia {
             merge_3: 0,
             merge_4: 0,
             merged: 0,
+            counters_busy: false,
             counters: Default::default(),
             players: Default::default(),
             missiles: Default::default(),
@@ -664,10 +668,7 @@ impl Tia {
             || (RESP0..RESP0 + 5).contains(&address)
             || locks[2]
             || locks[3]
-            || self
-                .counters
-                .iter()
-                .any(|c| c.strobe_left != 0 || c.window_history != 0 || c.deferred);
+            || self.counters_busy;
         if !busy {
             for i in 0..2 {
                 let p = &mut self.players[i];
@@ -840,6 +841,10 @@ impl Tia {
                 };
                 c.window_history = ((c.window_history << 1) | window as u8) & 0b111;
             }
+            self.counters_busy = self
+                .counters
+                .iter()
+                .any(|c| c.strobe_left != 0 || c.window_history != 0 || c.deferred);
         }
 
         // ---- playfield: each bit is read on H@1 and shown from the next H@2
