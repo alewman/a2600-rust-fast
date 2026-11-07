@@ -456,8 +456,20 @@ impl Tia {
     /// not tick and that hold no strobe skip their update (all of them
     /// through HBLANK and on every falling edge but HMOVE's), which is most
     /// steps.
+    #[inline]
     pub fn step(&mut self, write: Option<(u8, u8)>) {
-        let rise = self.rising;
+        // The two edges do different work: one copy of the step for each,
+        // so each loses the other's branches. The steps alternate, so the
+        // choice is a branch the CPU predicts.
+        if self.rising {
+            self.step_edge::<true>(write);
+        } else {
+            self.step_edge::<false>(write);
+        }
+    }
+
+    fn step_edge<const RISE: bool>(&mut self, write: Option<(u8, u8)>) {
+        let rise = RISE;
         let fall = !rise;
         let address: i32 = match write {
             Some((a, _)) => (a & 0x3F) as i32,

@@ -7,3 +7,5 @@ alternating runs a game, five games; A/A noise about 1% overall, 3% a game).
   instead of the four-entry ring (the comparators see HMxx four steps late;
   writes are at least six steps apart, so one remembered change would do):
   x1.004, noise, and it trades a ring for a timing argument. Not kept.
+- **Fat LTO, one codegen unit** (`lto = "fat"`, `codegen-units = 1`):
+  x0.998. The hot code is all in this crate already. Not kept.
