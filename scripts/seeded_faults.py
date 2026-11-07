@@ -93,6 +93,32 @@ FAULTS = {
         "            if self.changes == 5 {",
         "            if self.changes == 4 {",
     ),
+    # The fork's shortcuts: each must be caught, or it could diverge unseen.
+    "fast-quiet-step-drops-nusiz-history": (
+        "tia.rs",
+        "                p.size_history = (self.nusiz[i], p.size_history.0);\n",
+        "",
+    ),
+    "fast-pixel-cache-kept-over-a-write": (
+        "tia.rs",
+        "            self.write_register(address, value);\n            self.pixels_cache = None;\n",
+        "            self.write_register(address, value);\n",
+    ),
+    "fast-plain-step-keeps-pending": (
+        "tia.rs",
+        "                    c.pending = false;\n",
+        "",
+    ),
+    "fast-plain-step-taken-under-a-lock": (
+        "tia.rs",
+        "            && !locks[2]\n",
+        "",
+    ),
+    "fast-busy-ignores-the-hold": (
+        "tia.rs",
+        ".any(|c| c.strobe_left != 0 || c.window_history != 0 || c.deferred);",
+        ".any(|c| c.strobe_left != 0 || c.deferred);",
+    ),
     # The board: a halted (WSYNC) cycle a half clock short. (Sampling RDY on
     # another of steps one to five is not a fault: RDY only changes on a
     # cycle's first or last step, board.rs.)

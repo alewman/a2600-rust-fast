@@ -1,91 +1,79 @@
-# a2600-rust
+# a2600-rust-fast
 
-A Rust Atari 2600 board transcribed from
-[a2600-python](https://github.com/alewman/a2600-python) (frozen at the tag
-`a2600-rust-pin-1`) on [6502-rust](https://github.com/alewman/6502-rust),
-and proven equivalent to it: judged directly against the die where the
-reference is, and in lockstep with the reference everywhere else. It is the
-base for `a2600-rust-fast`.
-
-The board is the reference's, module for module: a half-colour-clock model of
-the TIA's circuit (picture, sync, RDY, HMOVE, collisions, both sound
-channels), the RIOT with its lazy timer, the 13-bit bus with WSYNC as a
-stretched read, every cartridge scheme the licensed dumps use (2K/4K, F8, F6,
-F4 and their Super Chip forms, E0, 3F, FE, E7, FA, CV, UA, FC, F0, the
-32-in-1, the DPC and the Supercharger with its stand-in BIOS and tape), the
-controllers (joystick, paddles, keypads, driving controller, Booster Grip,
-SaveKey), identification through MAME's software list and the board's own
-detector, the NTSC, PAL and SECAM rows and the #699 consoles' TIA revisions.
-Names and hardware comments are carried over; where Rust forced a difference,
-the module header says so. Not yet: the reference's pygame window.
+A speed fork of [a2600-rust](https://github.com/alewman/a2600-rust), the Rust
+Atari 2600 board, held in lockstep with it: every change must leave this
+board's traces identical to a2600-rust's (and so to a2600-python's at the pin)
+on every case, and must measure faster, or it is not kept. It adds the window,
+`a2600-play`.
 
 ```text
-cargo build --release
-target/release/a2600 ROM.zip --frames 120 --png last.png --wav sound.wav
+cargo build --release --features frontend
+target/release/a2600-play "Pitfall! - Pitfall Harry's Jungle Adventure (USA).zip"
+target/release/a2600-play game.bin --machine pal --left paddles --phosphor
 ```
 
-It runs at about two to three times real time (100 to 160 frames a second on
-Combat and Pitfall! on a loaded machine), some fifteen times the reference on
-PyPy: correct, not yet fast.
+Arrows and Space are the left joystick, W A S D and Left Shift the right; F1
+Select, F2 Reset, F3/F4 colour or B/W, F5-F8 the difficulties; P pause, Tab
+fast forward, F11 fullscreen, F12 a screenshot, Esc quit; `--help` lists the
+paddles, keypad, driving controller, Booster Grip and SaveKey. Gamepads map
+by button position (the first is the left joystick). The window is the
+reference's `frontend.py` on SDL2: the board runs faster than real time, so
+the sound queue sets the pace (without sound, a timer at the machine's frame
+rate does).
 
-## Certification
+## Speed
 
-| What | Version |
-| --- | --- |
-| a2600-python (the reference) | tag `a2600-rust-pin-1` (`21080ca`) |
-| 6502-rust | `71747eb` (from 6502-python `741419a`, the revision the reference pins) |
-| tia-fpga's die traces | lrrosa/tia-fpga `7bcd84e`, `sim/traces` only |
+**x1.886** over the fork point (a2600-rust `e42ec82`), measured directly, on
+all five benchmark games alike (x1.85 to x1.94): about 225 frames a second
+against 120 on one core of a loaded shared machine, nearly four times real
+time.
 
-Ladder status at this commit (Linux x86_64, rustc 1.93.1; the reference on
-PyPy 7.3.20):
+| Kept | A/B against the build before it |
+| --- | ---: |
+| HMxx's four-step history as a ring, not a copied array | x1.029 |
+| On a quiet step (no object clocked, none in a strobe, hold or deferred step: every falling edge without HMOVE's pulses, and HBLANK's rising edges) skip the object sections, which change only NUSIZ's history | x1.201 |
+| The output pins on demand, the colour only on the pixel's falling edge | x1.019 |
+| Carry whether a counter is busy rather than scan the five every step | x1.016 |
+| Cache the objects' outputs between busy steps and register writes | x1.030 |
+| One copy of the step for each clock edge (a const generic) | x1.107 |
+| A copy of the object sections for a plain MOTCK step, its inputs as literals | x1.077 |
+| The plain step's counter update without the strobe, hold and deferred terms | x1.153 |
+| The four merge registers as the bytes of one word | x1.050 |
 
-| Rung | What | Result | Script |
-| --- | --- | --- | --- |
-| 1 | The TIA against the die: every Sim2600 trace, tia-fpga's 22 and the reference's 17, every pin and both audio pads, half clock by half clock | 39 of 39 pass: 37 match everywhere, `hmove_cycles` and `hmove_resp0` by exactly the reference's counted C27 departures (lum 230 / col 220 / blank 32 and 2638 / 2638 / 352) | `rung1.sh` |
-| 2 | The reference's test programs in lockstep: the Stella issue ROMs, the #699 serial ROMs on the PAL row under each of the seven revisions, the die cartridges | 132 of 132 traces identical | `rung2.sh` |
-| 3 | The smoke group in lockstep (every scheme, PAL, the sweep's residue, classics), 150 slices each | 112 of 112 identical | `rung3.sh` |
-| 4 | Long runs with inputs in lockstep: Pitfall! (3,000 slices), River Raid, Adventure, Kaboom! (paddles), Space Invaders, Pitfall II (DPC), Combat on PAL with both joysticks, BurgerTime (E7), Decathlon (FE), Dragonstomper (AR) | 10 of 10 identical | `rung4.sh` |
-| 5 | Identification: scheme, Super Chip and source for every local dump against the reference's `cartridge.identify` | 1,586 files, every line identical | `rung5.sh` |
+Measured directly against the fork point after the first eight: x1.796;
+after all nine: x1.886.
+Tried and not kept, with their numbers: [docs/not-kept.md](docs/not-kept.md).
 
-A slice is 262 lines of CPU cycles. The trace (`src/trace.rs`) carries, each
-slice: the cycle, instruction and halted-cycle counts, the CPU's registers,
-the RIOT's RAM and raw timer state, a CRC of every line the TIA drew and of
-every audio sample, and the TIA's counters; with `--steps A:B`, one line per
-instruction to narrow a difference down. The command-line tool's WAV is
-byte-identical to the reference's and its PNG decodes to the same pixels.
+Where the time goes now: the TIA's half-clock step, still about 85%, with no
+single line above 4%; the 6507 and the cartridges together under 5%.
 
-**Seeded faults** (`scripts/seeded_faults.py`): fourteen one-line faults, in
-the TIA rules the die settled (C24, C25, C26, C27, C28, C29), a console's
-revision field, the RIOT's wrap-cycle rule both ways (C6), FE, 3F, the DPC,
-the Supercharger and the WSYNC halt: all caught, six by the die alone. Two
-of the first set changed nothing observable (a guard term the test already
-implied, and RDY sampled on another step the board documents as equivalent)
-and were replaced by faults that do.
+## The rule and the gate
 
-Two things found on the way: the TIA, transcribed, matched all 39 die traces
-at its first build; and a bug in this board's reading of MAME's list (a
-closing tag's name) made Dig Dug and Video Life build the wrong scheme, which
-rungs 3 and 5 caught.
+`scripts/ladder.sh` (about 70 seconds): `cargo test`, rung 1 (the TIA against
+the 39 die traces, the C27 departures exact), and all 255 lockstep cases
+against the reference traces (`external/refcache`, a2600-rust's, identical to
+a2600-python's at the pin): the reference's test programs, the smoke group,
+the long runs with inputs, and a SaveKey game writing its save. A change that
+leaves one trace different is not a speed-up.
 
-CI runs the build, `cargo clippy -D warnings`, the tests and rung 1 on
-tia-fpga's public traces. The reference is private and the ROMs are local, so
-rungs 2-5 run by hand:
+**Measuring** on a shared machine: `a2600-bench` times by the thread's own
+CPU time (`/proc/thread-self/schedstat`), and `scripts/ab.py` alternates two
+builds game by game on one pinned core and compares each side's best of 12
+short runs (other work only ever slows a run down; the median moved by 10% on
+an A/A run). An A/A run is within 1% overall and 3% a game. **Profiling**:
+`perf` is not allowed here, so `a2600-profile` (feature `profile`) samples the
+program counter on SIGPROF and `scripts/profile.py` resolves the samples with
+`addr2line`, inlined frames included.
 
-```text
-scripts/fetch_a2600python.sh external/a2600-python /path/to/a2600-python   # the pin, with a PyPy venv
-scripts/fetch_traces.sh                                                       # tia-fpga's traces
-external/a2600-python/.venv-pypy/bin/python external/a2600-python/scripts/die_carts.py \
-    --out external/a2600-python/tests/die_carts
-scripts/rung1.sh
-scripts/rung2.sh && scripts/rung3.sh && scripts/rung4.sh   # --reference-cache external/refcache reuses traces
-scripts/rung5.sh
-scripts/seeded_faults.py
-```
+**Seeded faults** (`scripts/seeded_faults.py`): a2600-rust's fourteen, and
+five in this fork's own shortcuts (the quiet step's NUSIZ history, the pixel
+cache over a write, the plain step's counter pending, the plain step taken
+under a RESMP lock, the busy flag ignoring the hold): **19 caught, 0
+missed**, the fork's five by the die traces alone.
 
-`scripts/cases.tsv` (written by `scripts/make_cases.py`) names the cases;
-`docs/handoff-brief.md` is the brief this was built from.
+`docs/handoff-brief.md` is a2600-rust's brief; this fork's record is its
+history and the tables above.
 
 ## Licence
 
-MIT (see `LICENSE`). Nothing third-party is committed: no ROMs, no traces of
-games, no die traces (fetched), no reference code.
+MIT (see `LICENSE`). Nothing third-party is committed.
