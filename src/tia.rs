@@ -268,7 +268,10 @@ pub struct Tia {
     pub h2_history: u16,
     pub hmove_history: u16,
     /// HMxx 1 to 4 steps ago
+    /// HMxx as committed on each of the last 4 steps, a ring: `hm_pos` is
+    /// the slot the next commit writes, which holds HMxx from 4 steps ago
     pub hm_late: [[u8; 5]; 4],
+    pub hm_pos: usize,
     /// merged pulses, steps ago
     pub merge_1: u8,
     pub merge_2: u8,
@@ -363,6 +366,7 @@ impl Tia {
             h2_history: 0,
             hmove_history: 0,
             hm_late: [[0; 5]; 4],
+            hm_pos: 0,
             merge_1: 0,
             merge_2: 0,
             merge_3: 0,
@@ -574,7 +578,7 @@ impl Tia {
         let mut still: u8 = 0;
         if m_h1 {
             let mut hit: u8 = 0;
-            for (i, &hm) in self.hm_late[3].iter().enumerate() {
+            for (i, &hm) in self.hm_late[self.hm_pos].iter().enumerate() {
                 let hm = hm as i32;
                 if count == (hm & 0x8) | (!hm & 0x7) {
                     // D7 is wired the other way
@@ -942,8 +946,8 @@ impl Tia {
         self.h1_history = ((self.h1_history << 1) | h1 as u16) & 0xFFF;
         self.h2_history = ((self.h2_history << 1) | h2 as u16) & 0xFFF;
         self.hmove_history = ((self.hmove_history << 1) | (address == HMOVE) as u16) & 0xFFF;
-        let late = self.hm_late;
-        self.hm_late = [self.hm, late[0], late[1], late[2]];
+        self.hm_late[self.hm_pos] = self.hm;
+        self.hm_pos = (self.hm_pos + 1) & 3;
         self.merge_4 = self.merge_3;
         self.merge_3 = self.merge_2;
         self.merge_2 = self.merge_1;
