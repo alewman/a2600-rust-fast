@@ -941,6 +941,7 @@ impl Tia {
     /// no HMOVE pulse, strobe, hold or lock), so that copy loses the branches
     /// those inputs decide.
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     fn objects(
         &mut self,
         object_clock: u8,
