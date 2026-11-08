@@ -4,8 +4,13 @@
 //!     a2600-play "Pitfall! - Pitfall Harry's Jungle Adventure (USA).zip"
 //!     a2600-play game.bin --machine pal --left paddles --phosphor
 //!
-//! Picture: the television's frames, a fixed window of lines per standard, in
-//! a palette from `palettes` (the community's charts, not measurements).
+//! Console: `--machine`, else the file's name (NTSC, PAL, SECAM or No-Intro's
+//! "(Europe)"), else PAL if the program draws 50 Hz frames in a second's run on
+//! an NTSC console (as Stella decides), else NTSC.
+//! Picture: the television's frames, a window of lines per standard that follows
+//! the frames the program draws (a 50 Hz demo on an NTSC console shows whole, at
+//! its own rate, as on a set that syncs to it), in a palette from `palettes`
+//! (the community's charts, not measurements).
 //! `--phosphor` averages each frame with the one before, a frontend option,
 //! never a board behaviour. Sound: the TIA's two samples a line, resampled
 //! linearly to 44.1 kHz; the queue sets the pace, as the board runs faster
@@ -53,11 +58,75 @@ const COLOUR: u8 = 0x08;
 const LEFT_A: u8 = 0x40;
 const RIGHT_A: u8 = 0x80;
 
-/// (first line shown, lines shown) of a television frame, per standard.
-fn window_lines(machine: &str) -> (usize, usize) {
-    match machine {
-        "ntsc" => (28, 216),
-        _ => (36, 256),
+/// (first line shown, lines shown) of a television frame, for 60 Hz frames or 50
+/// Hz ones.
+fn window_lines(long: bool) -> (usize, usize) {
+    if long {
+        (36, 256)
+    } else {
+        (28, 216)
+    }
+}
+
+/// A frame this long or longer is a 50 Hz television's (312 lines against 262;
+/// Stella splits them at the same place).
+const LONG_FRAME: usize = 287;
+
+/// Frames in a row a program must draw for the other television before the
+/// window follows it (a frame or two of odd length while it changes scenes don't).
+const WINDOW_STREAK: u32 = 30;
+
+/// A file name's words, upper-cased, trailing digits dropped ("triplet_ntsc50" is
+/// TRIPLET, NTSC), so PAL means (PAL) or _pal and not Palace.
+fn name_words(upper: &str) -> impl Iterator<Item = &str> {
+    upper
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .map(|word| word.trim_end_matches(|c: char| c.is_ascii_digit()))
+}
+
+/// The console a file's name gives, if any.
+fn machine_by_name(name: &str) -> Option<&'static str> {
+    let upper = name.to_uppercase();
+    let has = |word: &str| name_words(&upper).any(|w| w == word);
+    if has("SECAM") {
+        Some("secam")
+    } else if has("NTSC") {
+        Some("ntsc")
+    } else if has("PAL") || upper.contains("(EUROPE") {
+        Some("pal")
+    } else {
+        None
+    }
+}
+
+/// Frames a program is run for, on an NTSC console, to see which television it
+/// draws for, and how many of the first are skipped while it starts up.
+const PROBE_FRAMES: u32 = 60;
+const PROBE_SKIP: u32 = 20;
+
+/// PAL when the program draws 50 Hz frames (most of them, past its start), else
+/// NTSC.
+fn machine_by_frames(image: &[u8]) -> &'static str {
+    let row = machine("ntsc").expect("ntsc row");
+    let Ok(mut system) = System::from_rom(image, row, None, &Options::default()) else {
+        return "ntsc";
+    };
+    let television = Television::attach(&mut system.board_mut().tia);
+    let (mut seen, mut long) = (0, 0);
+    for n in 0..PROBE_FRAMES {
+        system.run_frames(1);
+        if n < PROBE_SKIP {
+            continue;
+        }
+        if let Some(frame) = &television.borrow().frame {
+            seen += 1;
+            long += (frame.len() >= LONG_FRAME) as u32;
+        }
+    }
+    if long * 2 > seen {
+        "pal"
+    } else {
+        "ntsc"
     }
 }
 
@@ -148,7 +217,7 @@ struct Args {
 fn parse() -> Args {
     let mut args = Args {
         rom: PathBuf::new(),
-        machine: "ntsc".into(),
+        machine: String::new(),
         left: "joystick".into(),
         right: "joystick".into(),
         scale: 3,
@@ -197,8 +266,16 @@ fn parse() -> Args {
 fn main() {
     let args = parse();
     println!("{HELP}");
-    let row = machine(&args.machine).unwrap_or_else(|| panic!("no machine {}", args.machine));
-    let (image, _) = read_image(&args.rom).unwrap_or_else(|e| panic!("{e}"));
+    let (image, member) = read_image(&args.rom).unwrap_or_else(|e| panic!("{e}"));
+    let machine_name = if args.machine.is_empty() {
+        let file = args.rom.file_name().unwrap_or_default().to_string_lossy();
+        let name = format!("{file} {member}");
+        machine_by_name(&name).unwrap_or_else(|| machine_by_frames(&image))
+    } else {
+        &args.machine
+    };
+    let row = machine(machine_name).unwrap_or_else(|| panic!("no machine {machine_name}"));
+    println!("console: {machine_name}");
     let mut system =
         System::from_rom(&image, row, None, &Options::default()).unwrap_or_else(|e| panic!("{e}"));
     let television = Television::attach(&mut system.board_mut().tia);
@@ -229,7 +306,7 @@ fn main() {
     let sdl = sdl2::init().expect("SDL");
     let video = sdl.video().expect("SDL video");
     let controllers = sdl.game_controller().expect("SDL game controllers");
-    let (first, lines) = window_lines(&args.machine);
+    let (mut first, mut lines) = window_lines(machine_name != "ntsc");
     let mut builder = video.window(
         &format!(
             "{} — a2600-rust-fast",
@@ -274,19 +351,20 @@ fn main() {
         None
     };
     let mut events = sdl.event_pump().expect("events");
-    let colours: Vec<u32> = palette(&args.machine)
+    let colours: Vec<u32> = palette(machine_name)
         .expect("a palette")
         .iter()
         .map(|[r, g, b]| 0xFF00_0000 | (*r as u32) << 16 | (*g as u32) << 8 | *b as u32)
         .collect();
-    let frame_rate = row.timing.colour_clock_hz / (228.0 * row.timing.nominal_lines as f64);
+    let mut frame_rate = row.timing.colour_clock_hz / (228.0 * row.timing.nominal_lines as f64);
     let mut resampler =
         Resampler::new(2.0 * row.timing.colour_clock_hz / 228.0, SAMPLE_RATE as f64);
-    let target = (BUFFER_FRAMES * SAMPLE_RATE as f64 / frame_rate) as u32 * 2; // bytes
+    let mut target = (BUFFER_FRAMES * SAMPLE_RATE as f64 / frame_rate) as u32 * 2; // bytes
     let mut pads: Vec<GameController> = Vec::new();
     let (mut paused, mut fast) = (false, false);
     let mut previous: Option<Vec<u32>> = None;
     let mut words = vec![0u32; WIDTH * lines];
+    let mut streak = 0;
     let (mut frames, mut since, mut shown) = (0u32, Instant::now(), 0u64);
     let mut next_frame = Instant::now();
 
@@ -485,7 +563,37 @@ fn main() {
             frames += 1;
         }
 
-        // -- the picture
+        // -- the picture, in the window of the television the program draws for
+        let length = television.borrow().frame.as_ref().map(Vec::len);
+        if let Some(length) = length {
+            let long = length >= LONG_FRAME;
+            if long == (lines == window_lines(true).1) {
+                streak = 0;
+            } else {
+                streak += 1;
+                if streak >= WINDOW_STREAK {
+                    streak = 0;
+                    (first, lines) = window_lines(long);
+                    frame_rate = row.timing.colour_clock_hz / (228.0 * length as f64);
+                    target = (BUFFER_FRAMES * SAMPLE_RATE as f64 / frame_rate) as u32 * 2;
+                    texture = creator
+                        .create_texture_streaming(
+                            PixelFormatEnum::ARGB8888,
+                            WIDTH as u32,
+                            lines as u32,
+                        )
+                        .expect("a texture");
+                    words = vec![0u32; WIDTH * lines];
+                    previous = None;
+                    println!("picture: {length}-line frames, {lines} lines shown, {frame_rate:.2} frames a second");
+                    if !args.fullscreen {
+                        let _ = canvas
+                            .window_mut()
+                            .set_size(2 * WIDTH as u32 * args.scale, lines as u32 * args.scale);
+                    }
+                }
+            }
+        }
         if let Some(frame) = &television.borrow().frame {
             for (n, out) in words.chunks_mut(WIDTH).enumerate() {
                 match frame.get(first + n) {
