@@ -109,7 +109,7 @@ fn samples_s16(samples: &[f64], gain: f64) -> Vec<i16> {
 fn blend(current: &mut [u32], previous: &[u32]) {
     for (a, &b) in current.iter_mut().zip(previous) {
         // each halved first, so no channel carries into the next
-        *a = ((*a & 0xFEFEFE) >> 1) + ((b & 0xFEFEFE) >> 1) | 0xFF00_0000;
+        *a = (((*a & 0xFEFEFE) >> 1) + ((b & 0xFEFEFE) >> 1)) | 0xFF00_0000;
     }
 }
 
@@ -423,7 +423,8 @@ fn main() {
                 }
                 "paddles" => {
                     if let Pads::Paddles(p) = &mut board.pads {
-                        p.position[0] = Some((mouse.x() as f64 / width).clamp(0.0, 1.0));
+                        // The position is the pot's resistance, which falls as the knob turns right.
+                        p.position[0] = Some((1.0 - mouse.x() as f64 / width).clamp(0.0, 1.0));
                     }
                     let pressed = mouse.left() || left_stick.fire;
                     let level = if pressed {
